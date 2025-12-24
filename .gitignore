@@ -1,0 +1,17 @@
+# Minimal ignore list for this repo (kept intentionally small)
+
+# macOS
+.DS_Store
+
+# Python bytecode caches (present under backend/)
+__pycache__/
+*.py[cod]
+
+# Virtualenv (common for backend)
+.venv/
+
+# Frontend dependencies & build output (present under frontend/)
+frontend/node_modules/
+frontend/dist/
+
+
