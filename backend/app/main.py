@@ -5,6 +5,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import asyncpg
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -176,5 +177,45 @@ def _format_sse(event: SseEvent) -> str:
 @app.get("/healthz")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/api/notebook/test-connection")
+async def test_connection() -> dict:
+    """Test the PostgreSQL connection with the configured DSN."""
+    notebook = await repo.get_notebook()
+    dsn = notebook.settings.postgres_dsn
+
+    if not dsn:
+        return {"status": "error", "message": "No DSN configured"}
+
+    try:
+        # Try to create a pool and make a simple query
+        test_pool = await asyncpg.create_pool(
+            dsn,
+            min_size=1,
+            max_size=1,
+            timeout=5.0,
+        )
+        if test_pool is None:
+            return {"status": "error", "message": "Failed to create connection pool"}
+
+        async with test_pool.acquire() as conn:
+            # Simple query to test connection
+            result = await conn.fetchval("SELECT 1")
+            if result != 1:
+                await test_pool.close()
+                return {"status": "error", "message": "Connection test query failed"}
+
+        await test_pool.close()
+        return {"status": "success", "message": "Connected successfully"}
+
+    except asyncpg.InvalidCatalogNameError:
+        return {"status": "error", "message": "Database does not exist"}
+    except asyncpg.InvalidPasswordError:
+        return {"status": "error", "message": "Invalid password"}
+    except asyncpg.PostgresConnectionError as exc:
+        return {"status": "error", "message": f"Connection failed: {exc}"}
+    except Exception as exc:
+        return {"status": "error", "message": f"Unexpected error: {exc}"}
 
 

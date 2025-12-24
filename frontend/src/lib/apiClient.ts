@@ -52,4 +52,10 @@ export async function runCell(cellId: string): Promise<{ runId: number }> {
   });
 }
 
+export async function testConnection(): Promise<{ status: string; message: string }> {
+  return request<{ status: string; message: string }>("/notebook/test-connection", {
+    method: "POST",
+  });
+}
+
 

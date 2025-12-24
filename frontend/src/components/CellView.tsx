@@ -5,6 +5,8 @@ import type { Cell, CellType } from "../store/notebookStore";
 
 interface Props {
   cell: Cell;
+  isFocused: boolean;
+  onFocus: () => void;
   onChangeCode: (code: string) => void;
   onChangeType: (type: CellType) => void;
   onRun: () => void;
@@ -24,9 +26,16 @@ const statusClass = (status: Cell["status"]) => {
   }
 };
 
-function CellView({ cell, onChangeCode, onChangeType, onRun, onDelete }: Props) {
+function CellView({ cell, isFocused, onFocus, onChangeCode, onChangeType, onRun, onDelete }: Props) {
   return (
-    <div className="cell">
+    <div
+      className="cell"
+      onClick={onFocus}
+      style={{
+        border: isFocused ? "2px solid #3b82f6" : "2px solid transparent",
+        transition: "border-color 0.2s",
+      }}
+    >
       <div className="cell-header">
         <select value={cell.type} onChange={(e) => onChangeType(e.target.value as CellType)} style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #cbd5e1" }}>
           <option value="python">Python</option>

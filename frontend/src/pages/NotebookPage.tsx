@@ -2,14 +2,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import CellView from "../components/CellView";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { useDebounce } from "../hooks/useDebounce";
-import { createCell, deleteCell, fetchNotebook, runCell, updateCell, updateSettings } from "../lib/apiClient";
+import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
+import { createCell, deleteCell, fetchNotebook, runCell, testConnection, updateCell, updateSettings } from "../lib/apiClient";
 import { subscribeToNotebookEvents } from "../lib/sse";
 import { CellType, useNotebookStore } from "../store/notebookStore";
+
+type ConnectionStatus = "idle" | "testing" | "success" | "error";
 
 function NotebookPage() {
   const { notebook, applyNotebook, upsertCell, updateCellLocal, removeCell } = useNotebookStore();
   const [dsnDraft, setDsnDraft] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [focusedCellId, setFocusedCellId] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
+  const [connectionMessage, setConnectionMessage] = useState<string>("");
   const isLoaded = useMemo(() => Boolean(notebook), [notebook]);
 
   useEffect(() => {
@@ -54,6 +60,29 @@ function NotebookPage() {
     try {
       const updated = await updateSettings({ postgresDsn: dsnDraft });
       applyNotebook(updated);
+
+      // Test the connection after saving
+      if (dsnDraft) {
+        setConnectionStatus("testing");
+        setConnectionMessage("Testing connection...");
+
+        try {
+          const result = await testConnection();
+          if (result.status === "success") {
+            setConnectionStatus("success");
+            setConnectionMessage(result.message);
+          } else {
+            setConnectionStatus("error");
+            setConnectionMessage(result.message);
+          }
+        } catch (err) {
+          setConnectionStatus("error");
+          setConnectionMessage("Failed to test connection");
+        }
+      } else {
+        setConnectionStatus("idle");
+        setConnectionMessage("");
+      }
     } catch (err) {
       console.error(err);
       setErrorMessage("Failed to save settings. Please check your connection.");
@@ -103,9 +132,11 @@ function NotebookPage() {
 
   const handleTypeChange = useCallback(
     async (cellId: string, type: CellType) => {
-      updateCellLocal(cellId, { type });
+      // Reset code to default template when switching type
+      const newCode = type === "python" ? "# Python\n" : "-- SQL\n";
+      updateCellLocal(cellId, { type, code: newCode });
       try {
-        const updated = await updateCell(cellId, { type });
+        const updated = await updateCell(cellId, { type, code: newCode });
         upsertCell(updated);
       } catch (err) {
         console.error(err);
@@ -137,35 +168,102 @@ function NotebookPage() {
     }
   }, []);
 
+  const focusNextCell = useCallback(() => {
+    if (!notebook?.cells.length) return;
+
+    if (!focusedCellId) {
+      setFocusedCellId(notebook.cells[0].id);
+      return;
+    }
+
+    const currentIndex = notebook.cells.findIndex(c => c.id === focusedCellId);
+    if (currentIndex < notebook.cells.length - 1) {
+      setFocusedCellId(notebook.cells[currentIndex + 1].id);
+    }
+  }, [notebook, focusedCellId]);
+
+  const focusPreviousCell = useCallback(() => {
+    if (!notebook?.cells.length) return;
+
+    if (!focusedCellId) {
+      setFocusedCellId(notebook.cells[notebook.cells.length - 1].id);
+      return;
+    }
+
+    const currentIndex = notebook.cells.findIndex(c => c.id === focusedCellId);
+    if (currentIndex > 0) {
+      setFocusedCellId(notebook.cells[currentIndex - 1].id);
+    }
+  }, [notebook, focusedCellId]);
+
+  useKeyboardShortcuts(
+    {
+      onRunCell: handleRun,
+      onDeleteCell: handleDelete,
+      onAddPythonCell: () => handleAddCell("python"),
+      onAddSqlCell: () => handleAddCell("sql"),
+      onFocusNext: focusNextCell,
+      onFocusPrevious: focusPreviousCell,
+    },
+    focusedCellId
+  );
+
   if (!isLoaded) {
     return <p>Loading notebook...</p>;
   }
 
+  const getConnectionIndicator = () => {
+    const styles = {
+      idle: { color: "#64748b", icon: "⚪" },
+      testing: { color: "#eab308", icon: "🟡" },
+      success: { color: "#22c55e", icon: "🟢" },
+      error: { color: "#ef4444", icon: "🔴" },
+    };
+    const { color, icon } = styles[connectionStatus];
+    return (
+      <span style={{ color, fontSize: "12px", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", minWidth: "fit-content" }}>
+        <span>{icon}</span>
+        {connectionMessage && <span>{connectionMessage}</span>}
+      </span>
+    );
+  };
+
   return (
     <>
       <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage(null)} />
-      <div className="toolbar">
-        <input
-          value={dsnDraft}
-          onChange={(e) => setDsnDraft(e.target.value)}
-          placeholder="Postgres DSN (postgresql://user:pass@host:port/db)"
-          style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }}
-        />
-        <button onClick={handleSaveSettings} style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #0f172a", background: "#0f172a", color: "#fff" }}>
-          Save Settings
-        </button>
-        <button onClick={() => handleAddCell("python")} style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1" }}>
-          + Python
-        </button>
-        <button onClick={() => handleAddCell("sql")} style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1" }}>
-          + SQL
-        </button>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            value={dsnDraft}
+            onChange={(e) => setDsnDraft(e.target.value)}
+            placeholder="Postgres DSN (postgresql://user:pass@host:port/db)"
+            style={{ flex: "1 1 200px", minWidth: "200px", padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }}
+          />
+          {getConnectionIndicator()}
+          <button onClick={handleSaveSettings} style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #0f172a", background: "#0f172a", color: "#fff", whiteSpace: "nowrap", flexShrink: 0 }}>
+            Save Settings
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => handleAddCell("python")} style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #0f172a", background: "#fff", color: "#0f172a", fontWeight: 500 }}>
+            + Python
+          </button>
+          <button onClick={() => handleAddCell("sql")} style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #0f172a", background: "#fff", color: "#0f172a", fontWeight: 500 }}>
+            + SQL
+          </button>
+          <span style={{ marginLeft: "auto", fontSize: "12px", color: "#64748b", alignSelf: "center" }}>
+            💡 Ctrl/Cmd+↑/↓: Navigate | Ctrl/Cmd+Shift+Enter: Run | Ctrl/Cmd+Shift+⌫: Delete | Ctrl/Cmd+B: Python | Ctrl/Cmd+L: SQL
+          </span>
+        </div>
       </div>
 
       {notebook?.cells.map((cell) => (
         <CellView
           key={cell.id}
           cell={cell}
+          isFocused={focusedCellId === cell.id}
+          onFocus={() => setFocusedCellId(cell.id)}
           onChangeCode={(code) => handleCodeChange(cell.id, code)}
           onChangeType={(type) => handleTypeChange(cell.id, type)}
           onDelete={() => handleDelete(cell.id)}
