@@ -196,7 +196,6 @@ docker stop test-postgres && docker rm test-postgres
 | **Independent branches** | A independent of failing B; C depends only on A | C still runs successfully |
 | **Timeout (Python)** | `import time; time.sleep(35)` | Stops ~30s with timeout error |
 | **Row limit (SQL)** | Query returns >1000 rows | Truncates to 1000 with warning |
-| **String escaping** | Python: `name = \"O'Reilly\"`; SQL: `WHERE name = {{name}}` | Query executes without quoting issues |
 
 ---
 
@@ -347,9 +346,16 @@ Edit Cell 4 → Execute: [Cell 4]  (independent)
 - **Optimization:** Only execute impacted subgraph (not entire notebook)
 
 ### 4. **Error Isolation**
-- **Decision:** Track failed cells, only skip their descendants
-- **Rationale:** Independent branches should continue executing
-- **Example:** If Cell B fails but Cell C doesn't depend on B, Cell C still runs
+- **Decision:** Track failed cells, skip their descendants but allow independent branches to continue
+- **Rationale:** Avoid wasting execution time on cells that can't succeed due to missing upstream definitions
+- **Behavior:**
+  - When Cell A fails, any Cell B that depends on A is **skipped** (status set to "idle", not executed)
+  - Skipped cells do **not** show their own errors (e.g., NameError) - they're silently skipped
+  - Independent cells (those not depending on failed cells) continue executing normally
+- **Example:**
+  - Cells: `x = 5` (A) → `y = x + 5` (B) → `z = y * 2` (C), and independent `w = 100` (D)
+  - Delete Cell A → Cell B shows "NameError: x is not defined", Cell C is **skipped** (no error shown), Cell D runs normally
+- **Note:** This means you'll only see the **first error in a dependency chain**, not cascading errors
 
 ### 5. **Variable Lifecycle**
 - **Decision:** Clear old defs before re-execution
